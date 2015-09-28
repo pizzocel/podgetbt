@@ -83,6 +83,10 @@ A configuration file is searched in `/etc/podgetbt.conf` then in `$HOME/.config/
 
 -   `TORRENTSUBDIR`: The name of a subdirectory in `$MP3DIR`. The audio files of torrents are expected to appear in `$MP3DIR/$TURRENTSUBDIR` after they have been downloaded by the torrent client.
 
+-   `TRANSMISSIONHOST`: The host, where `transmission-daemon` is running.
+
+-   `TRANSMISSIONLOGIN`: Login data for the transmission daemon. They are formatted as \<name\>:\<password\>
+
 -   `UNPLAYEDDAYS`: The number of days an unplayed podcast episode will be kept on the system. If more days have passed since the file modification time the file will be deleted.
 
 -   `PLAYEDDAYS`: The number of days an played podcast episode will be kept on the system. If more days have passed since the file modification time the file will be deleted.
