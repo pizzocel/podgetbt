@@ -1,0 +1,306 @@
+#!/bin/bash
+shopt -s extglob
+regularexit='n'
+
+#Set some defaults. These may be overwritten when sourcing the config file
+MP3DIR=/var/lib/mpd/music
+TMPDIR=/tmp
+TMPSUBDIR=/tmp/podgetbt.$RANDOM
+PODGETBTDIR=/var/lib/podgetbt
+TORRENTSUBDIR=bitlove
+PODDIR=~/POD
+CONFIGFILES=( /etc/podgetbt.conf ~/.config/podgetbt/config )
+PODGET=podget
+UPDATELIB="mpc update"
+#The list of tracks that have been played.
+#This file is used for the delete strategy.
+PODCASTLIST=podcast.m3u
+PLAYEDLIST=played.m3u
+#Set this variable, if the above playlists
+#should not be placed in $MP3DIR
+#PLAYLISTDIR=
+#Number of  days a track is kept, if it has not been played
+UNPLAYEDDAYS=30
+#Number of days a track is kept, after it has been played
+PLAYEDDAYS=3
+
+#Verbosity levels
+V_QUIET=0
+V_ERROR=1
+V_WARN=2
+V_INFO=3
+V_DEBUG=4
+VERBOSITY=$V_INFO
+
+#Note: The following procedures up to the comment "End of customisable procedures"
+# can be overwritten by procedures in the config files.
+# In order to allow for this, the config files are sourced after the default definitions
+# of the procedures.
+
+# Call: log <level> <messages>
+# Handle log messages <messages> according to log level <level>.
+# Default implementation:
+# If  <level> is less then $VERBOSITY the messages are printed to standard output.
+log() {
+    level=$1
+    shift
+    msg="$*"
+
+    if [ $level -le $VERBOSITY ]; then
+	echo $msg
+    fi
+}
+
+declare -A transmission_tbl
+#Call: torrent_init
+#Initialisation with torrent server
+#This procedures prepares anything necessary to be able to remove the
+#entries of a torrent related to a podcast episode from the torrent server.
+#Default implementation:
+#Read list of torrents from transmission deamon and store the transmission ids
+#indexed by the file names in the hash table $transmission_tbl for later reference.
+torrent_init() {
+    local IFS=$'\n'
+    local id
+    if transmission_list=( $(transmission-remote $TRANSMISSIONHOST -n $TRANSMISSIONLOGIN -l))
+    then
+	unset transmission_list[-1]
+	unset transmission_list[0]
+	for l in "${transmission_list[@]}"
+	do
+	    id="${l:0:4}"
+	    transmission_tbl["${l:70}"]=${id##+( )}
+	done
+    else
+	log $V_ERROR "Cannot communicate with transmission daemon. Aborting."
+	exit 1
+    fi
+}
+
+#Call: remove <trackname>
+# Removes the podcast episode stored in the audio file named <trackname>.
+# This procedures can handle episodes that have been downloaded from a torrent
+# as well as episodes with directly downloaded audio files.
+# Default implementation:
+# If a transmission deamon id exists for <trackname>, the transmission daemon is asked
+# to delete the torrent together with its downloaded data.
+# Otherwise, simply the audio file <trackname> is deleted.
+remove () {
+    name=$(basename $1)
+    id=${transmission_tbl[$name]}
+    if [ -n "$id" ]
+    then
+	transmission-remote $TRANSMISSIONHOST -n $TRANSMISSIONLOGIN -t $id --remove-and-delete
+    else
+	rm -f $MP3DIR/$name
+    fi
+}
+
+# Call: move <source> <target>
+# Moves source file to target directory.
+# This procedure is used to get the downloaded track to the place, where the player will
+# expect it. It is not used for torrents.
+# Default implementation:
+# Use file system operation to move <source> to directory <target>. Then create an empty file
+# with the original name at the original place. The reason for doing so, is that podget will
+# expect its downloaded files to exist until they expire and should be deleted.
+move () {
+    source=$1
+    target=$2
+
+    #Move the file and leave an empty one
+    #so podget is happy to find it when podget tries to delete
+    #its old files
+    if [ -s $1 ]
+    then
+	mv "$1" "$2"
+	touch "$1"
+    fi
+}
+
+#Call: start_torrent_download <name>
+#<name> should point to a torrent file. The download of the torrent is then started.
+#Default implementation:
+# Use transmission daemon.
+start_torrent_download() {
+     transmission-remote $TRANSMISSIONHOST -n $TRANSMISSIONLOGIN -a $1
+}
+
+#End of customisable procedures.
+
+#Look for configuration files and try to source them
+configfound='n'
+for configfile in "${CONFIGFILES[@]}"
+do
+    if [ -e $configfile ]
+    then
+	source $configfile
+	configfound='y'
+    fi
+done
+if [ $configfound = 'n' ]
+then
+    log $V_WARN "Warning: None of the configuration files ${CONFIGFILES[@]} found."
+fi
+
+PODCASTLISTLOCK=$PODGETBTDIR/podcast.m3u.lock
+PODCASTLISTPATH="${PLAYLISTDIR:=$MP3DIR}/$PODCASTLIST"
+PLAYEDLISTPATH="$PLAYLISTDIR/$PLAYEDLIST"
+
+#Cleanup lock and temporary directory
+trap_exit() {
+    rm -fr $TMPSUBDIR
+    rm -fr $PODCASTLISTLOCK
+    if [ $regularexit != 'y' ]
+    then
+	log $V_ERROR "The program has been aborted irrgularly. There may be inconsistencies."
+    fi
+}
+trap trap_exit EXIT
+
+#Call: read_tracks <var> <file>
+#Read list of tracks from text file <file> into array variable <var> in sorted order
+#If the file does not exist an empty array is created.
+read_tracks () {
+    TRACKLISTVAR=$1
+    TRACKLISTFILE=$2
+
+    declare -n tracklist=$TRACKLISTVAR
+    local IFS=$'\n'
+    if [ -e "$TRACKLISTFILE" ]
+    then
+	tracklist=( $(sort "$TRACKLISTFILE") )
+    else
+	tracklist=( )
+    fi
+}
+
+#Call: handle_download <filename>
+#Handle file <filename> which has been downloaded by podget.
+#It may be an audio file or a torrent file.
+handle_download () {
+ path=$1
+
+ log $V_DEBUG "Handling podcast $path"
+ #The directory path is expeced to be of the form
+ #<category>/<feed>/<file>
+ #where <category> is usually the name of a podcast author
+ #and <feed> the name of the podcast.
+ file=$( basename "$path" )
+ ddir=$( dirname  "$path" )
+ dddir=$( dirname "$ddir" )
+ feed=$( basename "$ddir" )
+ category=$( basename "$dddir" )
+ #First handle files named *.torrent
+ if [[ "$file" == *.torrent ]]; then
+     start_torrent_download $path
+     soundfile="${file%%.torrent}"
+     soundpath="$TORRENTSUBDIR/$soundfile"
+ else
+     #Then move the *.mp3 and other files to their destination directory
+     move "$path" $MP3DIR
+     soundfile="$file"
+     soundpath="$soundfile"
+ fi
+ m3utmp="$TMPSUBDIR/${category}_${feed}.m3u"
+ log  $V_DEBUG "Adding $soundpath to $m3utmp and $PODCASTLISTPATH"
+ echo "$soundpath" >> "$m3utmp"
+ echo "$soundpath" >> "$TMPSUBDIR/$PODCASTLIST"
+
+ $UPDATELIB
+}
+
+declare -a podcasts
+read_podcastlist () {
+    local IFS=$'\n'
+    podcasts=( $(cat $1) )
+}
+
+torrent_init
+NOW=$(date +%s)
+
+
+#Make sure only one instance of this script is running.
+while ! mkdir $PODCASTLISTLOCK
+do
+    sleep 1
+done
+#For temoporary files
+mkdir -p $TMPSUBDIR
+#Read the list of files that have been played and that are podcasts
+read_tracks PLAYED $PLAYEDLISTPATH
+read_tracks PODCASTS $PODCASTLISTPATH
+
+#Check for podcasts that are old enogh to be deleted.
+i=0
+for pdcst in "${PODCASTS[@]}"
+do
+    # Look for the podcast in the list of tracks already played
+    while [[ i -lt ${#PLAYED[*]} && "${PLAYED[i]}" < "$pdcst" ]]
+    do
+	let i=$i+1
+    done
+
+    # The time to keep this podcast is determined depending
+    # on whether it has been played or not. 
+    if [[ "${PLAYED[i]}" = "$pdcst" ]]
+    then
+	maxdays=$PLAYEDDAYS
+	log $V_DEBUG "$pdcst has been played"
+    else
+	maxdays=$UNPLAYEDDAYS
+	log $V_DEBUG "$pdcst has not been played"
+    fi
+
+    truepath=$MP3DIR/$pdcst
+    if [ -e "$truepath" ]
+       then
+	   mtime=$(stat -c %Y "$truepath")
+	   let days=($NOW-$mtime)/60/60/24
+	   log $V_DEBUG "$days days old"
+	   if [ $days -gt $maxdays ]; then
+	       log $V_INFO "Deleting old episode file $f"
+	       remove $pdcst
+	   else
+	       log $V_DEBUG "Adding $pdcst to new podcast list"
+	       echo $pdcst >> "$TMPSUBDIR/$PODCASTLIST"
+	   fi
+    fi
+done
+
+#Now we call $PODGET which does the real work of downloading
+#podcast audio files or their torrent files.
+#We inspect the list of new downloaded in handle the files listed.
+#Torrent file will be given to the torrent server. Other files
+#will be moved to their destination.
+cd $PODDIR
+last_new_list=$(ls New*.m3u | tail -1)
+if $PODGET; then
+    current_new_list=$(ls New*.m3u | tail -1)
+    if [ "$last_new_list" = "$current_new_list" ]
+    then
+	log $V_INFO "No new podcast episodes found."
+    else
+	read_podcastlist $current_new_list
+	
+	for path in "${podcasts[@]}"; do
+	    handle_download "$path"
+	done
+    fi
+
+    #If we come to this location, everything could be successfully comleted
+    #and the new podcast list can be moved to its place.
+    if [ -e "$TMPSUBDIR/$PODCASTLIST" ]
+    then
+	mv "$TMPSUBDIR/$PODCASTLIST" "$PODCASTLISTPATH"
+    fi
+    #We move the lists of new podcast sound files to their final destination.
+    m3ufiles=( "$TMPSUBDIR"/*.m3u )
+    if [ -e ${m3ufiles[0]} ]
+    then
+	mv -t "$PLAYLISTDIR" "${m3ufiles[@]}"
+    fi
+fi
+
+regularexit='y'
+exit 0

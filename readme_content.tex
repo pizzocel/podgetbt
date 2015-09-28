@@ -1,0 +1,217 @@
+\section*{podgetbt}\label{podgetbt}
+\newcommand{\podgetbt}{\emph{podgetbt}}
+\podgetbt{} manages the download of podcast episodes.
+It was written in response to the lack of a small podcatcher 
+that can handle podcasts distributed as bit torrents
+in a convenient way. 
+It is implemented as a simple script without a GUI.
+So it can be run in the background and on small devices.
+
+Before starting the downloads the script tries to free
+up disk space by deleting old episodes. Of course you 
+can configure how long episodes should be kept.
+
+Most of the required functionality already has been 
+implemented elsewhere.
+So \podgetbt{} relies on other tools. It requires 
+\begin{itemize}
+\item a \emph{podcatcher} to download the episodes
+  of the podcast or their torrents files (note this podcatcher is 
+  only expected to download the torrent file, which contains 
+  a description of the bit torrent, but not the audio content.);
+\item a \emph{bittorrent client} to handle bittorrent downloads;
+\item an \emph{audio file player}. 
+\end{itemize}
+
+The default tools are 
+\href{http://podget.sourceforge.net}{\emph{podget}} for the podcatcher, 
+\href{http://www.transmissionbt.com}{\emph{transmission-daemon}} for the transmission client and 
+\href{http://www.musicpd.org}{\emph{mpd}} for the audio file player.
+Currently \podgetbt{} is tested only to work together with these tools. 
+
+\section*{Running}\label{running}
+
+The script is simply started without arguments.
+
+\section*{Configuration}\label{configuration}
+
+As \emph{podgetbt} uses other tools, the result of running podgetbt
+also depends on the configuration of these tools. In particular the podcasts
+and the download policies are configured with podget.
+
+\subsection*{Configuration of other tools}
+In this section we give some short hints on how to configure the
+default tools. For details please refer to the documentation of the 
+tools.
+\subsubsection*{\emph{podget}}
+If \emph{podget} is run the first time without an existing configuration, 
+configuration default files are generated in  \texttt{\$HOME/.podget}.
+These files can then be adapted to your needs.
+
+\texttt{podgetrc} is the main configuration file.
+In it \texttt{DIR\_LIBRARY} is set to the path where
+podget places its downloads.
+You have to make sure, that this is set to the  same path  as \texttt{PODDIR}
+in  \podgetbt{}'s own configuration (see  below).
+\texttt{CONFIG\_SERVERLIST} is the name of the server list file
+also found in \texttt{\$HOME/.podget}.
+This server list enumerates the podcasts that are 
+to be checked for new episodes.
+For each podcast a line is to be added of the form
+
+\textless{}url\textgreater{} \textless{}cathegory\textgreater{} 
+\textless{}cathegory\textgreater{} 
+
+\noindent\sloppy
+Here \textless{}url\textgreater{} refers to the URL of the  feed to be downloaded. 
+\textless{}cathegory\textgreater{} and \textless{}name\textgreater{} can be chosen freely. 
+The episodes will then be placed in the directory
+\texttt{\$DIR\_LIBRARY}/\textless{}cathegory\textgreater{}/\textless{}name\textgreater{}.
+\podgetbt{} later uses these names  to create the name 
+of the playlist with the new episodes.
+It is \textless{}cathegory\textgreater{}\_\textless{}name\textgreater{}\texttt{.m3u}.
+
+
+\subsubsection*{\emph{transmission-daemon}}
+\sloppy
+You find the configuration file in \texttt{/etc/transmission-daemon/setting.json}.
+Note, thath this file should only be modified when \emph{transmission-daemon}
+is not running.
+
+As \emph{mpd} needs to update its sound library, before the new
+files can be played, it is a good idea to configure the 
+\emph{transmission-deamon} to trigger this update after
+a file has been downloaded from a torrent.
+This is possible, as
+\emph{transmission-daemon} runs a script after finishing each download
+provided the configuration variable 
+\texttt{script-torrent-done-enabled} is set to \texttt{true}
+and \texttt{script-torrent-done-filename} is set to the file containing the script. To update the data base of \emph{mpd} the script file 
+should  contain the line
+\begin{verbatim}
+mpc update
+\end{verbatim}
+
+
+The directory where the downloads are placed is set in the 
+variable \texttt{download-dir}. You can set it to the 
+directory, where the audio player (\emph{mpd}) finds its
+audio files.
+If you use \emph{transmission-daemon} also to download other 
+types of files than of course you should define a separate
+download directory and extend the above script to
+move podcast episodes to the proper place after each download.
+
+\subsubsection*{\emph{mpd}}
+The configuration file of \emph{mpd} is 
+usually found in \texttt{/etc/mpd.conf}.
+
+In order to cooperate with the other tools
+the directory, where \emph{mpd} is looking 
+for sound files has to be properly set.
+The variable name is \texttt{music\_directory}.
+
+\subsubsection*{Configuring common directories}
+
+The following settings of directories should match 
+
+\begin{tabular}{|l|l|l|}
+  \hline
+  Setting in \emph{podgetbt} & Other tool  & Setting \\
+  \hline
+  \texttt{\$PODDIR} & \emph{podget} & \texttt{\$DIR\_LIBRARY} \\
+  \texttt{\$MP3DIR/\$TORRENTSUBDIR} &
+  \emph{transmission-daemon}
+  & \texttt{download-dir} \\
+  \texttt{\$MP3DIR} & \emph{mpd}    & \texttt{music\_directory}\\  
+  \hline
+\end{tabular}
+
+\subsection*{\emph{podgetbt}}
+\sloppy
+A configuration file is searched in 
+\texttt{/etc/podgetbt.conf} then in 
+\texttt{\$HOME/.config/podgetbt/conf}.
+The file is sourced as a bash script. 
+So the configurtation variables must be set according the bash syntax.
+There are also some procedures that can be redefined if needed.
+
+
+\begin{itemize}
+\item \texttt{MP3DIR}:
+  The directory, where \emph{podgetbt} move all audio files of the episodes.
+  This only effects the files downloaded directly and not those
+  from torrents.
+  The directory \texttt{\$MP3DIR} 
+  should be the one, where the audio player looks for the audio files.
+  Default: \texttt{/var/lib/mpd/music}
+\item \texttt{PODDIR}:
+  The directory, where \emph{podget}  puts its downloads.
+  The setting of this variable must match the setting
+  of \texttt{\$DIR\_LIBRARY} of \emph{podget}.
+  \emph{podget} is expected to leave a file in this directory
+  containing a list of the episodes just downloaded.
+  It should be last file of those matching 
+  the pattern \texttt{NEW*.m3u} in lexicographic order.
+\item \texttt{PLAYLISTDIR}:
+  The directory for playlists. If left unset it will be automatically set
+  to the value of \texttt{MP3DIR}.
+
+  For each podcast a playlist named 
+  \texttt{\textless{}category$>\_<$feed\textgreater{}.m3u}
+  is created, where \texttt{\textless{}cathegory\textgreater{}} 
+  is the name of the cathegory of
+  the podcast defined with \emph{podget} and 
+  \texttt{\textless{}feed\textgreater{}} its feed name.
+  This playlist contains all new episodes downloaded in the 
+  last run of this program.
+
+  Furthremore, a playlist \texttt{podcasts.m3u} is maintained containing all episodes
+  of all podcasts, that exist on the system. 
+  When \emph{podgetbt} tries to free up space, it also consults
+  \texttt{podcasts.m3u} for the files that might be deleted
+  in case they reached their maximum age.
+\item \texttt{TORRENTSUBDIR}: 
+  The name of a subdirectory in \texttt{\$MP3DIR}. The audio files of torrents
+  are expected to appear in \texttt{\$MP3DIR/\$TURRENTSUBDIR} after they have
+  been downloaded by the torrent client.
+\item \texttt{UNPLAYEDDAYS}:
+  The number of days an unplayed podcast episode will be kept on the system.
+  If more days have passed since the file modification time the file will be 
+  deleted.
+\item \texttt{PLAYEDDAYS}:
+  The number of days an played podcast episode will be kept on the system.
+  If more days have passed since the file modification time the file will be 
+  deleted.
+\item \texttt{PLAYEDLIST}:
+  A playlist containing the episodes that have been played.
+  This file is read to determin whether \texttt{\$PLAYEDDAYS} or
+  \texttt{\$UNPLAYEDDAYS} is used to determine an episode has expired.
+  
+  If this file does not exist all episodes are treated as unplayed.
+  You could configure your audio player to maintain this list or
+  use a tool that does this.
+  Of course, writing this file manually is also an option.
+\item \texttt{UPDATELIB}:
+  A command line that causes the library of your music player to be
+  updated. The default is 
+\begin{verbatim}
+mpc update
+\end{verbatim}
+  It is called after all episode files have been placed into 
+  \texttt{\$MP3DIR}.
+  The files downloaded form torrent are not observed. So the torrent
+  client has to be configured to trigger the update after his 
+  downloads are completed.
+\item \texttt{PODGETBTDIR}:
+  Directory for all other files of \podgetbt{} that have
+  not been mentionned somewhere above.
+  This directory is currently only used for a lock to prevent
+  execution of several instances of \podgetbt{} at the same time.
+\item \texttt{VERBOSITY}:
+  Verbosity of the program.
+\end{itemize}
+
+%Local Variables:
+%TeX-master: "README.tex"
+%End:
